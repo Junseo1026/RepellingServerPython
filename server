@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime
 import bcrypt
 import logging
+from collections import defaultdict
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -310,11 +311,12 @@ async def find_id(name: str, email: str, db: Session = Depends(get_db)):
 @app.get("/api/v1/farm/list")
 async def get_farm_list(authorization: str = Header(None), db: Session = Depends(get_db)):
     try:
-        farms = db.query(
-            Farm.id.label("id"),
-            Farm.name.label("name"),
-            Farm.address.label("address"),
-            Farm.farm_type.label("farmType"),
+        # 모든 farm 데이터를 조인하여 쿼리
+        result = db.query(
+            Farm.id.label("farm_id"),
+            Farm.name.label("farm_name"),
+            Farm.address.label("farm_address"),
+            Farm.farm_type.label("farm_type"),
             Gateway.id.label("gateway_id"),
             Gateway.serial_id.label("gateway_serialId"),
             Gateway.ipv4.label("gateway_ipv4"),
@@ -335,59 +337,79 @@ async def get_farm_list(authorization: str = Header(None), db: Session = Depends
             RepellentSound.sound_name.label("repellentSound_soundName"),
             RepellentSound.sound_level.label("repellentSound_soundLevel")
         ).join(
-            Gateway, Farm.id == Gateway.id
-        ).join(
+            Gateway, Farm.gateway_id == Gateway.id
+        ).outerjoin(
             RepellentDevice, Farm.id == RepellentDevice.farm_id
-        ).join(
+        ).outerjoin(
             RepellentData, RepellentDevice.id == RepellentData.repellent_device_id
-        ).join(
+        ).outerjoin(
             RepellentSound, RepellentData.repellent_sound_id == RepellentSound.id
         ).all()
 
-        response_data = [
-            {
-                "id": farm.id,
-                "name": farm.name,
-                "address": farm.address,
-                "farmType": farm.farmType,
-                "gateway": {
-                    "id": farm.gateway_id,
-                    "serialId": farm.gateway_serialId,
-                    "ipv4": farm.gateway_ipv4,
-                    "isActivated": farm.gateway_isActivated,
-                },
-                "repellentDevice": [
-                    {
-                        "id": farm.repellentDevice_id,
-                        "serialId": farm.repellentDevice_serialId,
-                        "name": farm.repellentDevice_name,
-                        "latitude": farm.repellentDevice_latitude,
-                        "longitude": farm.repellentDevice_longitude,
-                        "isWorking": farm.repellentDevice_isWorking,
-                        "repellentData": [
-                            {
-                                "id": farm.repellentData_id,
-                                "detectionType": farm.repellentData_detectionType,
-                                "detectionNum": farm.repellentData_detectionNum,
-                                "detectionTime": farm.repellentData_detectionTime,
-                                "detectionDate": farm.repellentData_detectionDate,
-                                "reDetectionMinutes": farm.repellentData_reDetectionMinutes,
-                                "repellentSound": {
-                                    "id": farm.repellentSound_id,
-                                    "soundName": farm.repellentSound_soundName,
-                                    "soundLevel": farm.repellentSound_soundLevel,
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-            for farm in farms
-        ]
+        farms_dict = defaultdict(lambda: {
+            "id": None,
+            "name": None,
+            "address": None,
+            "farmType": None,
+            "gateway": None,
+            "repellentDevice": defaultdict(lambda: {
+                "id": None,
+                "serialId": None,
+                "name": None,
+                "latitude": None,
+                "longitude": None,
+                "isWorking": None,
+                "repellentData": []
+            })
+        })
+
+        for row in result:
+            farm = farms_dict[row.farm_id]
+            if not farm["id"]:
+                farm["id"] = row.farm_id
+                farm["name"] = row.farm_name
+                farm["address"] = row.farm_address
+                farm["farmType"] = row.farm_type
+                farm["gateway"] = {
+                    "id": row.gateway_id,
+                    "serialId": row.gateway_serialId,
+                    "ipv4": row.gateway_ipv4,
+                    "isActivated": row.gateway_isActivated,
+                }
+
+            if row.repellentDevice_id:
+                device = farm["repellentDevice"][row.repellentDevice_id]
+                if not device["id"]:
+                    device["id"] = row.repellentDevice_id
+                    device["serialId"] = row.repellentDevice_serialId
+                    device["name"] = row.repellentDevice_name
+                    device["latitude"] = row.repellentDevice_latitude
+                    device["longitude"] = row.repellentDevice_longitude
+                    device["isWorking"] = row.repellentDevice_isWorking
+
+                if row.repellentData_id:
+                    device["repellentData"].append({
+                        "id": row.repellentData_id,
+                        "detectionType": row.repellentData_detectionType,
+                        "detectionNum": row.repellentData_detectionNum,
+                        "detectionTime": row.repellentData_detectionTime,
+                        "detectionDate": row.repellentData_detectionDate,
+                        "reDetectionMinutes": row.repellentData_reDetectionMinutes,
+                        "repellentSound": {
+                            "id": row.repellentSound_id,
+                            "soundName": row.repellentSound_soundName,
+                            "soundLevel": row.repellentSound_soundLevel,
+                        }
+                    })
+
+        response_data = list(farms_dict.values())
+        for farm in response_data:
+            farm["repellentDevice"] = list(farm["repellentDevice"].values())
 
         return response_data
+
     except Exception as e:
-        print(f"Error occurred: {e}")
+        logger.error(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.get("/api/v1/gateway/valid/serial-id")

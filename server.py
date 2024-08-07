@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 # import pymysql
 import pymysql
 
-server_db = pymysql.connect(
-    user='kku', 
-    passwd='kkukku415', 
-    host='127.0.0.1', 
+#DB는 Mac미니 사용
+server_db = pymysql.connect( 
+    user='root',
+    passwd='',
+    host='127.0.0.1',
     db='repellerDB', 
     charset='utf8'
 )
@@ -46,8 +47,13 @@ server_db = pymysql.connect(
 # fetchone()은 한개만 fetch, fetchall()은 List형태로 fetch
 
 
+# http://222.116.135.70
+#  /api/v1/repellent-data/detail/group-farm/farm/1
+
+
 # 데이터베이스 설정
-DATABASE_URL = "mysql+mysqlconnector://kku:kkukku415@localhost/repellerDB"
+#DATABASE_URL = "mysql+mysqlconnector://kku:kkukku415@localhost/repellerDB" #대학원실 mysql
+DATABASE_URL = "mysql+pymysql://root:@127.0.0.1/repellerDB"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -90,12 +96,10 @@ class RefreshToken(Base):
 class RepellentData(Base):
     __tablename__ = 'repellent_data'
     
-    id = Column(Integer, primary_key=True, index=True)
     detection_date = Column(DateTime, nullable=False)
     detection_num = Column(Integer, nullable=False)
     detection_time = Column(String, nullable=False)
-    farm_id = Column(Integer, ForeignKey('farm.id'), nullable=False)
-    member_id = Column(Integer, ForeignKey('member.id'), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
     re_detection_minutes = Column(Integer, nullable=True)
     repellent_device_id = Column(Integer, ForeignKey('repellent_device.id'), nullable=False)
     repellent_sound_id = Column(Integer, ForeignKey('repellent_sound.id'), nullable=False)
@@ -187,6 +191,17 @@ class FindIdResponse(BaseModel):
 # FastAPI 애플리케이션 설정
 app = FastAPI()
 
+# Swagger 설정
+swagger_ui_parameters={
+    "deepLinking": True,
+    "displayRequestDuration": True,
+    "docExpansion": "none",
+    "operationsSorter": "method",
+    "filter": True,
+    "tagsSorter": "alpha",
+    "syntaxHighlight.theme": "tomorrow-night",
+}
+
 # 데이터베이스 의존성
 def get_db():
     db = SessionLocal()
@@ -228,16 +243,22 @@ async def get_farm_setting_list(authorization: str = Header(None), db: Session =
 @app.post("/api/v1/repellent-data")
 async def repellent_data(request: RepellentDataRequest, db: Session = Depends(get_db)):
     try:
+        
         gateway = db.query(Gateway).filter_by(serial_id=request.gatewayId).first()
         if not gateway:
             raise HTTPException(status_code=404, detail="Gateway not found")
-
+        # print(request)
+        date_part, time_part = request.timestamp.split(',')
+        # 날짜 부분만 파싱
+        detection_date = datetime.strptime(date_part, '%Y-%m-%d').date()
+        detection_datetime = datetime.strptime(f"{date_part} {time_part.strip()}", '%Y-%m-%d %H:%M:%S')
+    
+        detection_time = datetime.strptime(time_part.strip(), '%H:%M:%S').time()
         db_data = RepellentData(
-            detection_date=datetime.strptime(request.timestamp, '%Y-%m-%d,%H:%M:%S'),
-            detection_num=request.detectedCount,
-            detection_time=request.timestamp.split(',')[1],
-            farm_id=gateway.id,  # gateway ID를 사용
-            member_id=gateway.member_id,  # 관련 멤버 ID를 사용
+            detection_date=detection_datetime.date(),
+            detection_num = request.detectedCount,
+            detection_time=detection_datetime,  # `datetime` 객체로 저장
+            id=None,  # gateway ID를 사용
             re_detection_minutes=5,  # 필요 시 계산
             repellent_device_id=1,  # 필요 시 실제 데이터 사용
             repellent_sound_id=1,  # 필요 시 실제 데이터 사용
@@ -246,7 +267,7 @@ async def repellent_data(request: RepellentDataRequest, db: Session = Depends(ge
         db.add(db_data)
         db.commit()
         db.refresh(db_data)
-        return {"message": "Data created successfully"}
+        return JSONResponse(status_code=200, content={"message": "Data created successfully"})
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -256,7 +277,7 @@ async def repellent_data(request: RepellentDataRequest, db: Session = Depends(ge
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     try:
         # 요청 데이터 로그 출력
-        logger.info(f"Login request data: {request.dict()}")
+        logger.info(f"Login request data: {request.model_dump()}")
 
         # 데이터베이스 쿼리 시도
         user = db.query(Member).filter_by(login_id=request.loginId).first()
@@ -404,13 +425,21 @@ async def get_farm_list(authorization: str = Header(None), db: Session = Depends
 
         response_data = list(farms_dict.values())
         for farm in response_data:
-            farm["repellentDevice"] = list(farm["repellentDevice"].values())
+            farm["repellentDevice"] = sorted(
+                list(farm["repellentDevice"].values()), key=lambda x: x['id']
+            )
+            for device in farm["repellentDevice"]:
+                device["repellentData"] = sorted(
+                    device["repellentData"], key=lambda x: x['id']
+                )
 
         return response_data
 
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
 
 @app.get("/api/v1/gateway/valid/serial-id")
 async def check_gateway_serial_id(serialId: str, db: Session = Depends(get_db)):
@@ -463,21 +492,30 @@ async def get_repellent_data_main(farmId: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.get("/api/v1/repellent-data/detail/group-farm/farm/{farmId}")
+# FIXME: RepellentData 테이블 에는 farmid가 없음 따리서 repellent_device 테이블에서 데이터 비교 후 farm_id를 가져와야 함.
+
 async def get_group_farm_data(farmId: int, db: Session = Depends(get_db)):
     try:
+        # repellent_device 테이블과 조인
         data = db.query(
             RepellentData.detection_date.label("detectedAt"),
             RepellentData.detection_type.label("detectionType"),
             func.count(RepellentData.id).label("count")
+        ).join(
+            RepellentDevice, RepellentDevice.id == RepellentData.repellent_device_id
         ).filter(
-            RepellentData.farm_id == farmId
+            RepellentDevice.farm_id == farmId
         ).group_by(
             RepellentData.detection_date,
             RepellentData.detection_type
         ).all()
 
         return [
-            DayByDetectionListResponse(detectedAt=item.detectedAt, detectionType=item.detectionType, count=item.count)
+            DayByDetectionListResponse(
+                detectedAt=item.detectedAt.strftime("%Y-%m-%d"),  # 날짜를 문자열로 변환
+                detectionType=item.detectionType,
+                count=item.count
+            )
             for item in data
         ]
     except Exception as e:
@@ -585,3 +623,4 @@ def read_root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="222.116.135.70", port=8081, reload=True)
+

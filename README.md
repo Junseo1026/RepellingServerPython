@@ -3,7 +3,7 @@ RepellingServerPython<br><br>
 실행방법<br>
 Conda activate base<br> 
 uvicorn main:app --host 0.0.0.0 --port 8000<br><br>
-Nohup uvicorn main:app --host 0.0.0.0 --port 8000(백그라운드 실행)
+Nohup uvicorn main:app --host 0.0.0.0 --port 8000(백그라운드 실행, kill 명령어로 종료)
 
 새로운 쉘: ps -ef | grep uvicorn
 

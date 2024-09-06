@@ -191,6 +191,29 @@ class LoginResponse(BaseModel):
 class FindIdResponse(BaseModel):
     loginId: str
 
+class UpdateNameRequest(BaseModel):
+    name: str
+
+class UpdateFarmNameRequest(BaseModel):
+    name: str
+
+class UpdateFarmAddressRequest(BaseModel):
+    address: str
+
+class CreateFarmRequest(BaseModel):
+    gateway_id: int # 나중에  DB수정하면 gateway_serial_id로 바꿀것
+    address: str
+    member_id: int
+    farm_type: str
+    name: str
+    #farm_id는 인덱스 자동 증가
+
+class CreateGatewayRequest(BaseModel):
+    is_activated: bool
+    ipv4: str
+    serial_id: str
+    #gateway_id 인덱스 자동 증가
+
 # FastAPI 애플리케이션 설정
 app = FastAPI()
 
@@ -299,8 +322,6 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         logger.error(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-
-
 @app.post("/api/v1/register")
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     try:
@@ -332,11 +353,86 @@ async def find_id(name: str, email: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+@app.put("/api/v1/farmname/{farm_id}")
+async def update_farm_name(farm_id: int, request: UpdateFarmNameRequest, db: Session = Depends(get_db)):
+    try:
+        farm = db.query(Farm).filter(Farm.id == farm_id).first()
+
+        if not farm:
+            raise HTTPException(status_code=404, detail="Farm not found")
+
+        farm.name = request.name
+        db.commit()
+        db.refresh(farm)
+
+        return {"message": "Farm name updated successfully", "farm_id": farm.id, "name": farm.name}
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.put("/api/v1/farmaddress/{farm_id}")
+async def update_farm_address(farm_id: int, request: UpdateFarmAddressRequest, db: Session = Depends(get_db)):
+    try:
+        farm = db.query(Farm).filter(Farm.id == farm_id).first()
+
+        if not farm:
+            raise HTTPException(status_code=404, detail="Farm not found")
+
+        farm.address = request.address
+        db.commit()  
+        db.refresh(farm)
+
+        return {"message": "Farm address updated successfully", "farm_id": farm.id, "address": farm.address}
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+
+@app.post("/api/v1/farmcreate")
+async def create_farm(request: CreateFarmRequest, db: Session = Depends(get_db)):
+    try:
+        print(f"Received request: {request}")
+
+        new_farm = Farm(
+            gateway_id=request.gateway_id,
+            address=request.address,
+            member_id=request.member_id,
+            farm_type=request.farm_type,
+            name=request.name
+        )
+        
+        db.add(new_farm)
+        db.commit()
+        db.refresh(new_farm)
+        
+        return {"message": "Farm created successfully", "farm_id": new_farm.id, "name": new_farm.name}
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@app.delete("/api/v1/farm/{farm_id}")
+async def delete_farm(farm_id: int, db: Session = Depends(get_db)):
+    try:
+        farm = db.query(Farm).filter(Farm.id == farm_id).first()
+
+        if not farm:
+            raise HTTPException(status_code=404, detail="Farm not found")
+
+        db.delete(farm)
+        db.commit()
+
+        return {"message": "Farm deleted successfully", "farm_id": farm_id}
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 @app.get("/api/v1/farm/list")
 async def get_farm_list(authorization: str = Header(None), db: Session = Depends(get_db)):
     try:
-        # 모든 farm 데이터를 조인하여 쿼리
         result = db.query(
             Farm.id.label("farm_id"),
             Farm.name.label("farm_name"),
@@ -450,6 +546,30 @@ async def check_gateway_serial_id(serialId: str, db: Session = Depends(get_db)):
     try:
         exists = db.query(Gateway).filter_by(serial_id=serialId).first() is not None
         return SerialIdCheckResponse(isSerialIdExists=exists)
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+#게이트웨이 추가
+@app.post("/api/v1/gatewaycreate")
+async def create_gateway(request: CreateGatewayRequest, db: Session = Depends(get_db)):
+    try:
+        existing_gateway = db.query(Gateway).filter(Gateway.serial_id == request.serial_id).first()
+        if existing_gateway:
+            raise HTTPException(status_code=400, detail="Gateway with this serial_id already exists")
+
+        new_gateway = Gateway(
+            is_activated=request.is_activated,
+            ipv4=request.ipv4,
+            serial_id=request.serial_id
+        )
+        
+        db.add(new_gateway)
+        db.commit()
+        db.refresh(new_gateway) 
+        
+        return {"message": "Gateway created successfully", "gateway_id": new_gateway.id}
+    
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -640,6 +760,44 @@ async def get_member_by_id(member_id: int, db: Session = Depends(get_db)):
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@app.put("/api/v1/membername/{member_id}")
+async def update_member_name(member_id: int, request: UpdateNameRequest, db: Session = Depends(get_db)):
+    try:
+        member = db.query(Member).filter(Member.id == member_id).first()
+
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+
+        member.name = request.name
+        db.commit()
+        db.refresh(member)
+
+        return {"message": "Name updated successfully", "member": {"id": member.id, "name": member.name}}
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/api/v1/member/{member_id}/farms")
+async def get_farms_by_member_id(member_id: int, db: Session = Depends(get_db)):
+    try:
+        farms_with_gateway = db.query(Farm, Gateway.id.label("gateway_id")).join(Gateway, Farm.gateway_id == Gateway.id).filter(Farm.member_id == member_id).all()
+        if not farms_with_gateway:
+            raise HTTPException(status_code=404, detail="No farms found for this member")
+
+        return [
+            {
+                "farm_id": farm.id,
+                "farm_name": farm.name,
+                "address": farm.address,
+                "farm_type": farm.farm_type,
+                "gateway_id": gateway_id
+            } for farm, gateway_id in farms_with_gateway
+        ]
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
@@ -648,4 +806,3 @@ def read_root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="222.116.135.70", port=8080, reload=True)
-

@@ -11,7 +11,6 @@ import logging
 from collections import defaultdict
 
 # baseurl = "http://222.116.135.70:8080/"
-# 공부하기
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -206,13 +205,22 @@ class CreateFarmRequest(BaseModel):
     member_id: int
     farm_type: str
     name: str
-    #farm_id는 인덱스 자동 증가
+    #farm_id는 자동 증가
 
 class CreateGatewayRequest(BaseModel):
     is_activated: bool
     ipv4: str
     serial_id: str
-    #gateway_id 인덱스 자동 증가
+    #gateway_id 자동 증가
+
+class CreateRepellentDeviceRequest(BaseModel):
+    farm_id: int
+    serial_id: str
+    name: str
+    latitude: str
+    longitude: str
+    is_activated: bool = False
+    is_working: bool = True
 
 # FastAPI 애플리케이션 설정
 app = FastAPI()
@@ -539,8 +547,6 @@ async def get_farm_list(authorization: str = Header(None), db: Session = Depends
         logger.error(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-
-
 @app.get("/api/v1/gateway/valid/serial-id")
 async def check_gateway_serial_id(serialId: str, db: Session = Depends(get_db)):
     try:
@@ -582,7 +588,50 @@ async def check_device_serial_id(serialId: str, farmId: int, db: Session = Depen
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+@app.post("/api/v1/repellent-devicecreate")
+async def create_device(request: CreateRepellentDeviceRequest, db: Session = Depends(get_db)):
+    farm = db.query(Farm).filter(Farm.id == request.farm_id).first()
+    if not farm:
+        raise HTTPException(status_code=404, detail="Farm not found")
 
+    existing_device = db.query(RepellentDevice).filter(RepellentDevice.serial_id == request.serial_id).first()
+    if existing_device:
+        raise HTTPException(status_code=400, detail="Device with this serial_id already exists")
+
+    new_RepellentDevice = RepellentDevice(
+        farm_id=request.farm_id,
+        serial_id=request.serial_id,
+        name=request.name,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        is_activated=request.is_activated,
+        is_working=request.is_working
+    )
+
+    db.add(new_RepellentDevice)
+    db.commit()
+    db.refresh(new_RepellentDevice)
+
+    return {"message": "Device created successfully", "device_id": new_RepellentDevice.id}
+
+@app.delete("/api/v1/device/{device_id}")
+async def delete_repellentdevice(device_id: int, db: Session = Depends(get_db)):
+    try:
+        repellentdevice = db.query(RepellentDevice).filter(RepellentDevice.id == device_id).first()
+
+        if not repellentdevice:
+            raise HTTPException(status_code=404, detail="Worng device number")
+
+        db.delete(repellentdevice)
+        db.commit()
+
+        return {"message": "Your Device deleted successfully", "device_id": device_id}
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    
 @app.get("/api/v1/repellent-data/main")
 async def get_repellent_data_main(farmId: int, db: Session = Depends(get_db)):
     try:
@@ -616,10 +665,8 @@ async def get_repellent_data_main(farmId: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.get("/api/v1/repellent-data/detail/group-farm/farm/{farmId}")
-# FIXME: RepellentData 테이블 에는 farmid가 없음 따리서 repellent_device 테이블에서 데이터 비교 후 farm_id를 가져와야 함.
 async def get_group_farm_data(farmId: int, db: Session = Depends(get_db)):
     try:
-        # repellent_device 테이블과 조인
         data = db.query(
             RepellentData.detection_date.label("detectedAt"),
             RepellentData.detection_type.label("detectionType"),
@@ -796,7 +843,6 @@ async def get_farms_by_member_id(member_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
 
 @app.get("/")
 def read_root():

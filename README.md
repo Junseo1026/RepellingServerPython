@@ -2,8 +2,9 @@ RepellingServerPython<br><br>
 서버: ssh kku@222.116.135.70 -p 9922<br>
 실행방법<br>
 Conda activate base<br> 
-uvicorn main:app --host 0.0.0.0 --port 8000<br><br>
-Nohup uvicorn main:app --host 0.0.0.0 --port 8000(백그라운드 실행, kill 명령어로 종료)
+uvicorn main:app --host 0.0.0.0 --port 8000<br>
+Nohup uvicorn main:app --host 0.0.0.0 --port 8000(백그라운드 실행, kill 명령어로 종료)<br>
+sudo lsof -i :8080<br>
 
 새로운 쉘: ps -ef | grep uvicorn
 

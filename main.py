@@ -9,8 +9,19 @@ from datetime import datetime
 import bcrypt
 import logging
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+import jwt
+from fastapi.security import OAuth2PasswordBearer
+from jwt import PyJWTError
 
 # baseurl = "http://222.116.135.70:8080/"
+
+# JWT 설정
+SECRET_KEY = "secret_key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/login")
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -248,6 +259,100 @@ def get_db():
 def verify_password(plain_password, hashed_password):
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
+# JWT 토큰 생성 함수
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + (expires_delta if expires_delta else timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# 현재 사용자 가져오기
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except PyJWTError:
+        raise credentials_exception
+    user = db.query(Member).filter(Member.id == int(user_id)).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+@app.post("/api/v1/login")
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(Member).filter(Member.login_id == request.loginId).first()
+    if not user or not verify_password(request.password, user.password):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+
+    # JWT 토큰 생성
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user.id)}, expires_delta=access_token_expires
+    )
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# 로그인 유저의 회원정보 불러오기
+@app.get("/api/v1/members/me")
+async def get_member_me(current_user: Member = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        member = db.query(Member).filter(Member.id == current_user.id).first()
+
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        return {
+            "member_id": member.id,
+            "name": member.name,
+            "login_id": member.login_id,
+            "email": member.email
+        }
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+# 로그인 유저의 기기정보 불러오기
+@app.get("/api/v1/repellent_device/me")
+async def get_my_device(current_user: Member = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    try:
+        repellent_device = db.query(
+            RepellentDevice.id,
+            RepellentDevice.name,
+            RepellentDevice.is_activated,
+            RepellentDevice.is_working,
+            RepellentDevice.latitude,
+            RepellentDevice.longitude
+        ).join(Farm).filter(Farm.member_id == current_user.id).all()
+        
+        if not repellent_device:
+            raise HTTPException(status_code=404, detail="No device for this user")
+        return [
+            {
+                "device_id": device.id,
+                "name": device.name,
+                "is_activated": device.is_activated,
+                "is_working": device.is_working,
+                "latitude": device.latitude,
+                "longitude": device.longitude
+            }
+            for device in repellent_device
+        ]
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
 
 # 라우터 설정
 @app.get("/api/v1/farm/setting/list")
@@ -306,7 +411,7 @@ async def repellent_data(request: RepellentDataRequest, db: Session = Depends(ge
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
+'''
 # 로그인 / 토큰 같이 넘겨줘야함 수정필요
 @app.post("/api/v1/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -329,7 +434,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
+'''
 @app.post("/api/v1/register")
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     try:
@@ -806,6 +911,7 @@ async def get_member_by_id(member_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 @app.put("/api/v1/membername/{member_id}")
 async def update_member_name(member_id: int, request: UpdateNameRequest, db: Session = Depends(get_db)):

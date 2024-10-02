@@ -14,8 +14,8 @@ import jwt
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 import random
-from email.mime.text import MIMEText
 import smtplib
+from email.mime.text import MIMEText
 
 # baseurl = "http://222.116.135.70:8080/"
 
@@ -100,8 +100,6 @@ class Member(Base):
     name = Column(String, nullable=False)
     password = Column(String, nullable=False)
     verification_code = Column(String, nullable=True)
-    is_verified = Column(Boolean, default=False)
-
 
 class RefreshToken(Base):
     __tablename__ = 'refresh_token'
@@ -239,13 +237,12 @@ class CreateRepellentDeviceRequest(BaseModel):
     is_activated: bool = False
     is_working: bool = True
 
-class EmailVerification(Base):
-    __tablename__ = 'email_verification'
-    
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, nullable=False, unique=True)
-    verification_code = Column(String, nullable=False)
-    is_verified = Column(Boolean, default=False)
+class EmailRequest(BaseModel):
+    email: str
+
+class CodeVerificationRequest(BaseModel):
+    email: str
+    code: str
 
 # FastAPI 애플리케이션 설정
 app = FastAPI()
@@ -268,68 +265,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-def generate_verification_code():
-    return str(random.randint(100000, 999999))
-
-# 이메일 전송 함수
-def send_verification_code(email: str, code: str, smtp_user: str, smtp_password: str):
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    subject = "Your Verification Code"
-    body = f"Your verification code is {code}"
-
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = smtp_user
-    msg["To"] = email
-
-    try:
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()  # TLS 시작
-            server.login(smtp_user, smtp_password)  # Gmail 앱 비밀번호로 로그인
-            server.sendmail(smtp_user, email, msg.as_string())  # 이메일 전송
-        print("Verification email sent.")
-    except Exception as e:
-        print(f"Failed to send email: {e}")
-
-# 이메일 전송을 위한 API 엔드포인트
-@app.post("/api/v1/send-verification-code")
-async def send_verification_code_endpoint(email: str, db: Session = Depends(get_db)):
-    verification_code = generate_verification_code()
-
-    # member 테이블에서 이메일로 사용자 검색 및 업데이트
-    member = db.query(Member).filter(Member.email == email).first()
-    if member:
-        member.verification_code = verification_code
-        member.is_verified = False
-    else:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    db.commit()
-
-    # 이메일로 인증 코드 발송
-    smtp_user = "sonjunseo86@gmail.com"  # 발신자 Gmail 주소
-    smtp_password = "soap rkpa bmvs gwad"  # 발신자 Gmail 앱 비밀번호
-    send_verification_code(email, verification_code, smtp_user, smtp_password)
-
-    return {"message": "Verification code sent to your email."}
-
-# 인증 코드 확인 및 검증을 위한 API 엔드포인트
-@app.post("/api/v1/verify-code")
-async def verify_code(email: str, code: str, db: Session = Depends(get_db)):
-    # member 테이블에서 이메일로 사용자 검색
-    member = db.query(Member).filter(Member.email == email).first()
-
-    # 인증 코드 확인
-    if member and member.verification_code == code:
-        member.is_verified = True
-        member.verification_code = None  # 인증 후 코드 제거
-        db.commit()
-        return {"message": "Email verified successfully."}
-    else:
-        raise HTTPException(status_code=400, detail="Invalid verification code.")
-
 
 # 비밀번호 확인 함수
 def verify_password(plain_password, hashed_password):
@@ -362,40 +297,63 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return user
 
-@app.post("/api/v1/verify-code")
-async def verify_code(email: str, code: str, db: Session = Depends(get_db)):
-    # 이메일로 사용자 데이터 검색
-    email_verification = db.query(EmailVerification).filter(EmailVerification.email == email).first()
+# 인증 코드 생성 함수 (Java에서처럼 랜덤 6자리 숫자)
+def generate_verification_code():
+    return str(random.randint(100000, 999999))
 
-    # 인증 코드 확인
-    if email_verification and email_verification.verification_code == code:
-        email_verification.is_verified = True
-        db.commit()
-        return {"message": "Email verified successfully."}
-    else:
-        raise HTTPException(status_code=400, detail="Invalid verification code.")
+# 이메일 전송 함수
+def send_verification_code(email: str, code: str, smtp_user: str, smtp_password: str):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    subject = "Your Verification Code"
+    body = f"Your verification code is {code}"
 
-# 아이디 중복 확인
-@app.get("/api/v1/members/check-id/{regist_id}")
-async def check_member_id(regist_id: str, db: Session = Depends(get_db)):
-    existing_member = db.query(Member).filter(Member.login_id == regist_id).first()
-    
-    if existing_member:
-        raise HTTPException(status_code=400, detail="Regist ID already exists")
-    
-    return {"message": "Regist ID is available"}
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = smtp_user
+    msg["To"] = email
 
-@app.get("/api/v1/members/me")
-async def get_member_me(current_user: Member = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        # current_user는 이미 get_current_user로 인증된 사용자 정보입니다.
-        member = db.query(Member).filter(Member.id == current_user.id).first()
-        if not member:
-            raise HTTPException(status_code=404, detail="Member not found")
-        return member
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()  # TLS 시작
+            server.login(smtp_user, smtp_password)  # Gmail 앱 비밀번호로 로그인
+            server.sendmail(smtp_user, email, msg.as_string())  # 이메일 전송
+        print("Verification email sent.")
     except Exception as e:
-        print(f"Error occurred: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        print(f"Failed to send email: {e}")
+
+# 이메일 전송을 위한 API 엔드포인트
+@app.post("/api/v1/send-verification-code")
+async def send_verification_code_endpoint(request: EmailRequest, db: Session = Depends(get_db)):
+    verification_code = generate_verification_code()
+
+    # member 테이블에서 이메일로 사용자 검색 및 인증 코드 저장
+    member = db.query(Member).filter(Member.email == request.email).first()
+    if member:
+        member.verification_code = verification_code
+    else:
+        # 사용자 존재하지 않으면 새로 생성
+        member = Member(email=request.email, verification_code=verification_code)
+        db.add(member)
+
+    db.commit()
+
+    # 이메일로 인증 코드 발송
+    smtp_user = "sonjunseo86@gmail.com"  # 발신자 Gmail 주소
+    smtp_password = "soap rkpa bmvs gwad"  # 발신자 Gmail 앱 비밀번호
+    send_verification_code(request.email, verification_code, smtp_user, smtp_password)
+
+    return {"message": "Verification code sent to your email."}
+
+# 인증 코드 확인 API 엔드포인트
+@app.post("/api/v1/verify-code")
+async def verify_code(request: CodeVerificationRequest, db: Session = Depends(get_db)):
+    member = db.query(Member).filter(Member.email == request.email).first()
+
+    if member and member.verification_code == request.code:
+        return {"message": "Verification code is correct."}
+    else:
+        return {"message": "Verification code is incorrect."}
 
 @app.post("/api/v1/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -410,6 +368,59 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     )
     
     return {"access_token": access_token, "token_type": "bearer"}
+
+# 로그인 유저의 회원정보 불러오기
+@app.get("/api/v1/members/me")
+async def get_member_me(current_user: Member = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        member = db.query(Member).filter(Member.id == current_user.id).first()
+
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        return {
+            "member_id": member.id,
+            "name": member.name,
+            "login_id": member.login_id,
+            "email": member.email
+        }
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+# 로그인 유저의 기기정보 불러오기
+@app.get("/api/v1/repellent_device/me")
+async def get_my_device(current_user: Member = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    try:
+        repellent_device = db.query(
+            RepellentDevice.id,
+            RepellentDevice.name,
+            RepellentDevice.is_activated,
+            RepellentDevice.is_working,
+            RepellentDevice.latitude,
+            RepellentDevice.longitude
+        ).join(Farm).filter(Farm.member_id == current_user.id).all()
+        
+        if not repellent_device:
+            raise HTTPException(status_code=404, detail="No device for this user")
+        return [
+            {
+                "device_id": device.id,
+                "name": device.name,
+                "is_activated": device.is_activated,
+                "is_working": device.is_working,
+                "latitude": device.latitude,
+                "longitude": device.longitude
+            }
+            for device in repellent_device
+        ]
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 # 라우터 설정
@@ -524,7 +535,7 @@ async def find_id(name: str, email: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
+    
 @app.put("/api/v1/farmname/{farm_id}")
 async def update_farm_name(farm_id: int, request: UpdateFarmNameRequest, db: Session = Depends(get_db)):
     try:
